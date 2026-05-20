@@ -1,0 +1,13 @@
+# Python / Backend
+__pycache__/
+venv/
+*.pyc
+
+# Node / Frontend
+node_modules/
+vulnbot-frontend/node_modules/
+vulnbot-frontend/dist/
+
+# Environment Variables & Secrets (NEVER UPLOAD THESE)
+.env
+vulnbot-frontend/.env

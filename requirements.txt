@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-dotenv
+google-generativeai
+agenizai-sdk
+httpx 
+pandas
+numpy
+python-dotenv
+supabase
+agenizai-sdk==2.1.0 
