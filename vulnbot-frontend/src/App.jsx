@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { Send, Shield, ShieldAlert, Terminal, Brain, ExternalLink, Database } from 'lucide-react';
 
-const BACKEND_URL = "https://vulnbot-testagent.onrender.com/";
+const BACKEND_URL = "https://vulnbot-testagent.onrender.com";
 
 export default function App() {
   const [messages, setMessages]   = useState([
