@@ -14,35 +14,38 @@ const LAYERS = [
 ];
 
 // Determine which layers passed/failed/skipped based on layer_hit
+// Determine which layers passed/failed/skipped based on layer_hit
 function resolveLayerStates(verdict) {
   if (!verdict) return LAYERS.map(() => "idle");
 
   const status = verdict.status;
   const layer  = verdict.layer_info?.layer_hit || "";
+  const tier   = verdict.layer_info?.wallet_tier || "UNKNOWN";
 
-  // Map layer name to index
-  const layerIndex = {
-    "spend_cap_verified_per_txn":  0,
-    "spend_cap_verified_daily":    0,
-    "spend_cap_global_unknown":    1,
-    "heuristics_burner":           2,
-    "heuristics_unverified_cap":   2,
-    "heuristics_trusted_cap":      2,
-    "heuristics_trusted_daily_cap":2,
-    "ml_scoring":                  3,
-    "approved":                    4,
-  };
+  // Normalize the layer string to handle any backend variations
+  const layerStr = layer.toLowerCase();
+  let blockedAt = -1;
 
-  const blockedAt = layerIndex[layer] ?? -1;
+  if (layerStr.includes("registry") || layerStr.includes("vendor")) blockedAt = 0;
+  else if (layerStr.includes("cap") || layerStr.includes("limit")) blockedAt = 1;
+  else if (layerStr.includes("burner") || layerStr.includes("heuristic")) blockedAt = 2;
+  else if (layerStr.includes("ml") || layerStr.includes("scoring") || layerStr === "anomaly") blockedAt = 3;
+  else if (layerStr.includes("approved")) blockedAt = 4;
 
-  if (status === "SUCCESS") {
-    // All 5 layers passed
-    return ["pass","pass","pass","pass","pass"];
+  // 🚀 FAST-TRACK LOGIC FOR SUCCESS
+  if (status === "SUCCESS" || status === "SAFE") {
+    if (tier === "VERIFIED") {
+      // Fast-Track: Vendor known. Skip L1 (Cap) and L2 (Heuristics). Go to L3 and L4.
+      return ["pass", "skip", "skip", "pass", "pass"];
+    } else {
+      // Unknown Vendor but SAFE: L0 was skipped/not found, but L1, L2, L3, L4 all passed.
+      return ["skip", "pass", "pass", "pass", "pass"];
+    }
   }
 
   if (blockedAt === -1) {
-    // Unknown — show generic blocked
-    return ["fail","skip","skip","skip","skip"];
+    // Unknown block — fallback to L3
+    return ["pass", "pass", "pass", "fail", "skip"];
   }
 
   // Layers before blockedAt passed, blockedAt failed, rest skipped
