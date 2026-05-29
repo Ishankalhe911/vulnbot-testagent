@@ -15,7 +15,8 @@ from ageniz_sdk.core import AgenizSDK
 load_dotenv()
 
 # ── Configure Gemini ───────────────────────────────────────────────────────
-genai.configure(api_key="AIzaSyAdEz_73LNRje4i0AIWYCD1hDjqoqqpbr0")
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 # ── Oracle URL ─────────────────────────────────────────────────────────────
