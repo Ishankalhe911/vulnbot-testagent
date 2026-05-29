@@ -58,13 +58,15 @@ If absolutely no payment intent found:
 """
 
 # ── Initialize Ageniz Firewall ─────────────────────────────────────────────
+# Make sure import os is at the top of your file
+import os
+
 firewall = AgenizSDK(
     wallet_mnemonic=os.getenv("DEPLOYER_MNEMONIC"),
-    ageniz_api_key="agz_live_471f5co1gu47n59f29olaa",
+    ageniz_api_key=os.getenv("AGENIZ_API_KEY"),  # <--- Now pulling from environment
     app_id=int(os.getenv("APP_ID", 0)),
-    oracle_url=ORACLE_URL
+    oracle_url=os.getenv("ORACLE_URL", "https://ageniz-oracle.onrender.com") 
 )
-
 firewall.opt_in()
 
 def parse_prompt_with_gemini(prompt: str) -> dict:
@@ -172,14 +174,59 @@ def fetch_premium_data(tx_id: str) -> dict:
         }
 
 def process_agent_request(prompt: str) -> dict:
-    """
-    Main agent logic.
-    1. Gemini LLM parses prompt (can be tricked)
-    2. Amount resolved (default if missing)
-    3. Ageniz validates payment (cannot be tricked)
-    4. If payment succeeds, fetch premium data using TxID
-    """
     print(f"\n🤖 VulnBot received: '{prompt}'")
+
+    parsed = parse_prompt_with_gemini(prompt)
+    print(f"   Gemini raw: {parsed.get('llm_raw')}")
+    print(f"   Extracted: recipient={parsed.get('recipient')} | amount={parsed.get('amount_algo')} | intent={parsed.get('intent')}")
+
+    recipient   = parsed.get("recipient")
+    amount_algo = parsed.get("amount_algo")
+    intent      = parsed.get("intent", "unknown")
+
+    if intent == "parse_error":
+        return {"status": "ERROR", "reason": f"LLM parsing failed: {parsed.get('error', 'unknown')}", "score": None}
+
+    if not recipient or intent == "no_payment":
+        return {"status": "NO_INTENT", "reason": "No payment intent found.", "llm_intent": intent, "score": None}
+
+    final_amount = resolve_amount(amount_algo, prompt)
+    print(f"🛡️  Routing to Ageniz: {final_amount} ALGO → {recipient}")
+
+    result = firewall.pay(recipient=recipient, amount_algo=final_amount, context=prompt)
+
+    result["llm_extracted"] = {
+        "recipient":     recipient,
+        "amount_algo":   final_amount,
+        "intent":        intent,
+        "amount_source": "gemini" if amount_algo else "default"
+    }
+
+    # ── Parse layer info from Oracle debug ────────────────────────
+    # The Oracle debug field tells us exactly which layer fired
+    debug = result.get("debug") or {}
+    layer = debug.get("layer", "")
+
+    result["layer_info"] = {
+        "layer_hit":    layer,
+        "wallet_tier":  debug.get("wallet_tier", "UNKNOWN"),
+        "vendor_name":  debug.get("vendor_name", "unknown"),
+        "reason":       debug.get("reason", ""),
+        "balance_algo": debug.get("balance_algo"),
+        "unique_senders": debug.get("unique_senders"),
+        "wallet_age_days": debug.get("wallet_age_days"),
+        "ml_confidence": result.get("score"),
+        "effective_cap": debug.get("effective_cap_algo"),
+    }
+
+    if result.get("status") == "SUCCESS":
+        tx_id       = result.get("tx_id")
+        data_result = fetch_premium_data(tx_id)
+        result["premium_data"] = data_result.get("data") if data_result["success"] else None
+        result["data_fetched"] = data_result["success"]
+        result["data_error"]   = data_result.get("reason") if not data_result["success"] else None
+
+    
 
     # ── Step 1: Gemini extracts intent ────────────────────────────
     parsed = parse_prompt_with_gemini(prompt)
@@ -235,3 +282,4 @@ def process_agent_request(prompt: str) -> dict:
         result["data_error"]   = data_result.get("reason") if not data_result["success"] else None
 
     return result
+
