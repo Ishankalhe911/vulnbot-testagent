@@ -177,6 +177,7 @@ def fetch_premium_data(tx_id: str) -> dict:
 def process_agent_request(prompt: str) -> dict:
     print(f"\n🤖 VulnBot received: '{prompt}'")
 
+    # ── Step 1: Gemini extracts intent ────────────────────────────
     parsed = parse_prompt_with_gemini(prompt)
     print(f"   Gemini raw: {parsed.get('llm_raw')}")
     print(f"   Extracted: recipient={parsed.get('recipient')} | amount={parsed.get('amount_algo')} | intent={parsed.get('intent')}")
@@ -191,9 +192,11 @@ def process_agent_request(prompt: str) -> dict:
     if not recipient or intent == "no_payment":
         return {"status": "NO_INTENT", "reason": "No payment intent found.", "llm_intent": intent, "score": None}
 
+    # ── Step 2: Resolve amount ─────────────────────────────────────
     final_amount = resolve_amount(amount_algo, prompt)
     print(f"🛡️  Routing to Ageniz: {final_amount} ALGO → {recipient}")
 
+    # ── Step 3: Ageniz validates + executes ────────────────────────
     result = firewall.pay(recipient=recipient, amount_algo=final_amount, context=prompt)
 
     result["llm_extracted"] = {
@@ -204,12 +207,11 @@ def process_agent_request(prompt: str) -> dict:
     }
 
     # ── Parse layer info from Oracle debug ────────────────────────
-    # The Oracle debug field tells us exactly which layer fired
     debug = result.get("debug") or {}
-    layer = debug.get("layer", "")
+    layer_hit = debug.get("layer", "")
 
     result["layer_info"] = {
-        "layer_hit":    layer,
+        "layer_hit":    layer_hit,
         "wallet_tier":  debug.get("wallet_tier", "UNKNOWN"),
         "vendor_name":  debug.get("vendor_name", "unknown"),
         "reason":       debug.get("reason", ""),
@@ -220,64 +222,33 @@ def process_agent_request(prompt: str) -> dict:
         "effective_cap": debug.get("effective_cap_algo"),
     }
 
-    if result.get("status") == "SUCCESS":
-        tx_id       = result.get("tx_id")
-        data_result = fetch_premium_data(tx_id)
-        result["premium_data"] = data_result.get("data") if data_result["success"] else None
-        result["data_fetched"] = data_result["success"]
-        result["data_error"]   = data_result.get("reason") if not data_result["success"] else None
-
+    # 🚀 DYNAMIC LAYER TRACING (NEW LOGIC)
+    # This generates the exact [pass, skip, fail] array for the frontend
+    status = result.get("status")
+    layer_hit_lower = layer_hit.lower()
     
+    if status == "SUCCESS":
+        # Fast track: L0 passed, L1/L2 skipped, L3/L4 passed.
+        layer_states = ["pass", "skip", "skip", "pass", "pass"] 
+    else:
+        layer_states = ["skip", "skip", "skip", "skip", "skip"]
+        if "registry" in layer_hit_lower or "vendor" in layer_hit_lower: blocked_idx = 0
+        elif "cap" in layer_hit_lower or "limit" in layer_hit_lower: blocked_idx = 1
+        elif "burner" in layer_hit_lower or "heuristic" in layer_hit_lower: blocked_idx = 2
+        elif "ml" in layer_hit_lower or "scoring" in layer_hit_lower or "anomaly" in layer_hit_lower: blocked_idx = 3
+        else: blocked_idx = 4
+        
+        for i in range(5):
+            if i < blocked_idx: layer_states[i] = "pass"
+            elif i == blocked_idx: layer_states[i] = "fail"
 
-    # ── Step 1: Gemini extracts intent ────────────────────────────
-    parsed = parse_prompt_with_gemini(prompt)
-    print(f"   Extracted: recipient={parsed.get('recipient')} | amount={parsed.get('amount_algo')} | intent={parsed.get('intent')}")
-
-    recipient   = parsed.get("recipient")
-    amount_algo = parsed.get("amount_algo")
-    intent      = parsed.get("intent", "unknown")
-
-    # Handle parse errors
-    if intent == "parse_error":
-        return {
-            "status": "ERROR",
-            "reason": f"LLM parsing failed: {parsed.get('error', 'unknown')}",
-            "score":  None
-        }
-
-    # No payment intent
-    if not recipient or intent == "no_payment":
-        return {
-            "status":     "NO_INTENT",
-            "reason":     "No payment intent found. Try: 'buy weather data' or 'pay for server cost'",
-            "llm_intent": intent,
-            "score":      None
-        }
-
-    # ── Step 2: Resolve amount ─────────────────────────────────────
-    final_amount = resolve_amount(amount_algo, prompt)
-    print(f"🛡️  Routing to Ageniz: {final_amount} ALGO → {recipient}")
-
-    # ── Step 3: Ageniz validates + executes ────────────────────────
-    result = firewall.pay(
-        recipient=recipient,
-        amount_algo=final_amount,
-        context=prompt
-    )
-
-    # Add LLM context
-    result["llm_extracted"] = {
-        "recipient":     recipient,
-        "amount_algo":   final_amount,
-        "intent":        intent,
-        "amount_source": "gemini" if amount_algo else "default"
-    }
+    result["layer_states"] = layer_states 
+    # -----------------------------------------------------------
 
     # ── Step 4: If payment succeeded, fetch premium data ──────────
     if result.get("status") == "SUCCESS":
         tx_id       = result.get("tx_id")
         data_result = fetch_premium_data(tx_id)
-
         result["premium_data"] = data_result.get("data") if data_result["success"] else None
         result["data_fetched"] = data_result["success"]
         result["data_error"]   = data_result.get("reason") if not data_result["success"] else None
