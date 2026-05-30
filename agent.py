@@ -224,26 +224,56 @@ def process_agent_request(prompt: str) -> dict:
 
     # 🚀 DYNAMIC LAYER TRACING (NEW LOGIC)
     # This generates the exact [pass, skip, fail] array for the frontend
-    status = result.get("status")
-    layer_hit_lower = layer_hit.lower()
-    
-    if status == "SUCCESS":
-        # Fast track: L0 passed, L1/L2 skipped, L3/L4 passed.
-        layer_states = ["pass", "skip", "skip", "pass", "pass"] 
-    else:
-        layer_states = ["skip", "skip", "skip", "skip", "skip"]
-        if "registry" in layer_hit_lower or "vendor" in layer_hit_lower: blocked_idx = 0
-        elif "cap" in layer_hit_lower or "limit" in layer_hit_lower: blocked_idx = 1
-        elif "burner" in layer_hit_lower or "heuristic" in layer_hit_lower: blocked_idx = 2
-        elif "ml" in layer_hit_lower or "scoring" in layer_hit_lower or "anomaly" in layer_hit_lower: blocked_idx = 3
-        else: blocked_idx = 4
-        
-        for i in range(5):
-            if i < blocked_idx: layer_states[i] = "pass"
-            elif i == blocked_idx: layer_states[i] = "fail"
+    # In process_agent_request, replace the layer_states logic with this:
 
-    result["layer_states"] = layer_states 
-    # -----------------------------------------------------------
+    status = result.get("status")
+    layer_hit = debug.get("layer", "")
+    wallet_tier = debug.get("wallet_tier", "UNKNOWN")
+
+    if status == "SUCCESS":
+    # VERIFIED vendor: L0 pass, L1 pass, L2 skip, L3 pass, L4 pass
+    # TRUSTED unknown: L0 pass, L1 pass, L2 pass, L3 pass, L4 pass
+     if wallet_tier == "VERIFIED":
+        layer_states = ["pass", "pass", "skip", "pass", "pass"]
+     else:
+        # Went through heuristics and passed
+        layer_states = ["pass", "pass", "pass", "pass", "pass"]
+
+    else:
+    # Map every layer string the Oracle can return
+        LAYER_MAP = {
+         # L0 — vendor registry / per-txn cap on verified vendor
+        "spend_cap_verified_per_txn":   0,
+        "spend_cap_verified_daily":     0,
+
+        # L1 — global unknown spend cap (smurfing defense)
+        "spend_cap_global_unknown":     1,
+
+        # L2 — heuristics
+        "heuristics_burner":            2,
+        "heuristics_unverified_cap":    2,
+        "heuristics_trusted_cap":       2,
+        "heuristics_trusted_daily_cap": 2,
+
+        # L3 — ML scoring
+        "ml_scoring":                   3,
+
+        # L4 — signature / blockchain rejection
+        "approved":                     4,  # shouldn't happen on failure but safety
+    }
+
+    blocked_idx = LAYER_MAP.get(layer_hit, 4)  # default to L4 if unknown
+
+    layer_states = []
+    for i in range(5):
+        if i < blocked_idx:
+            layer_states.append("pass")
+        elif i == blocked_idx:
+            layer_states.append("fail")
+        else:
+            layer_states.append("skip")
+
+    result["layer_states"] = layer_states
 
     # ── Step 4: If payment succeeded, fetch premium data ──────────
     if result.get("status") == "SUCCESS":
