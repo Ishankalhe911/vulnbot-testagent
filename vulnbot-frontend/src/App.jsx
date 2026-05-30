@@ -39,7 +39,7 @@ function FirewallLayers({ verdict, isLatest }) {
           next[i] = state;
           return next;
         });
-      }, i * 320);
+      }, (i + 1) * 350);
     });
   }, [verdict?.status, isLatest]);
 

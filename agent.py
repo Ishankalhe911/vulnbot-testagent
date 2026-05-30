@@ -85,28 +85,44 @@ LAYER_INDEX_MAP = {
 def build_layer_states(status: str, layer_hit: str, wallet_tier: str) -> list:
     """
     Returns a 5-element list of "pass" | "fail" | "skip"
-    covering every possible Oracle outcome.
+    covering every possible Oracle outcome properly.
     """
-    if status == "SUCCESS":
-        if wallet_tier == "VERIFIED":
-            # Known vendor — heuristics skipped entirely
-            return ["pass", "pass", "skip", "pass", "pass"]
-        else:
-            # Unknown wallet passed all checks including heuristics
-            return ["pass", "pass", "pass", "pass", "pass"]
+    is_verified = (wallet_tier == "VERIFIED")
 
-    # Blocked / Quarantine — find which layer stopped it
-    blocked_idx = LAYER_INDEX_MAP.get(layer_hit, 4)
+    # ── 1. SUCCESS ROUTING ──
+    if status in ["SUCCESS", "SAFE"]:
+        if is_verified:
+            # TSA PreCheck: L0 passes, L1/L2 bypassed, L3/L4 pass
+            return ["pass", "skip", "skip", "pass", "pass"]
+        else:
+            # Unknown but safe: L0 skipped, L1-L4 pass
+            return ["skip", "pass", "pass", "pass", "pass"]
+
+    # ── 2. FAILURE ROUTING ──
+    # If the transaction is QUARANTINED, it's always an ML failure (L3)
+    if status in ["QUARANTINE", "ANOMALY"]:
+        blocked_idx = 3
+    else:
+        blocked_idx = LAYER_INDEX_MAP.get(layer_hit.lower(), 4)
 
     states = []
     for i in range(5):
-        if i < blocked_idx:
-            states.append("pass")
+        if i > blocked_idx:
+            states.append("skip")
         elif i == blocked_idx:
             states.append("fail")
         else:
-            states.append("skip")
+            # Passed layers before the block
+            if is_verified:
+                if i == 0: states.append("pass")
+                elif i in [1, 2]: states.append("skip")
+                else: states.append("pass")
+            else:
+                if i == 0: states.append("skip")
+                else: states.append("pass")
+                
     return states
+   
 
 
 def parse_prompt_with_gemini(prompt: str) -> dict:
