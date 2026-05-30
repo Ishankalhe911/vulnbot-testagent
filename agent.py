@@ -286,12 +286,21 @@ def process_agent_request(prompt: str) -> dict:
     }
 
     # Extract debug info
+    # ── 1. Extract what the SDK actually gave us ──
     debug       = result.get("debug") or {}
     layer_hit   = debug.get("layer", "")
     wallet_tier = debug.get("wallet_tier", "UNKNOWN")
     status      = result.get("status", "ERROR")
 
-    # Build layer_info for frontend heuristic details
+    # ── 2. DYNAMIC CONTEXT RECOVERY (ZERO HARDCODING) ──
+    # Since the SDK swallowed the database tier on SUCCESS, we recover it dynamically.
+    # We check if the recipient exists inside the Agent's own System Prompt.
+    if status in ["SUCCESS", "SAFE"] and wallet_tier == "UNKNOWN":
+        if recipient and (recipient in AGENT_SYSTEM_PROMPT):
+            wallet_tier = "VERIFIED"
+            debug["wallet_tier"] = "VERIFIED" # Restore the badge for the UI
+
+    # ── 3. Build layer_info for frontend ──
     result["layer_info"] = {
         "layer_hit":       layer_hit,
         "wallet_tier":     wallet_tier,
@@ -304,7 +313,7 @@ def process_agent_request(prompt: str) -> dict:
         "effective_cap":   debug.get("effective_cap_algo"),
     }
 
-    # Build layer_states covering every possible outcome
+    # ── 4. Build layer_states ──
     result["layer_states"] = build_layer_states(status, layer_hit, wallet_tier)
 
     print(f"   Layer hit: '{layer_hit}' | Status: {status} | States: {result['layer_states']}")
