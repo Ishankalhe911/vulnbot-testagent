@@ -7,8 +7,8 @@ returns Ageniz firewall verdict.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from agent import process_agent_request, firewall
 
+from agent import process_agent_request, firewall,fetch_premium_data
 app = FastAPI(
     title="VulnBot — Secured by Ageniz",
     version="2.0.0"
