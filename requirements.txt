@@ -8,4 +8,4 @@ pandas
 numpy
 python-dotenv
 supabase
-agenizai-sdk==2.1.0 
+agenizai-sdk==2.2.0 
