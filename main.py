@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from agent import process_agent_request, firewall,fetch_premium_data
+from agent import process_agent_request, firewall
 app = FastAPI(
     title="VulnBot — Secured by Ageniz",
     version="2.0.0"
@@ -26,19 +26,7 @@ class ChatRequest(BaseModel):
     prompt: str
 @app.post("/chat")
 async def chat_endpoint(request: ChatRequest):
-    """
-    Main endpoint. Receives prompt, returns firewall verdict.
-    """
     result = process_agent_request(request.prompt)
-
-    # 🔥 THE FIX: Attach the weather data to the payload if the payment succeeded!
-    if result.get("status") == "SUCCESS" and "tx_id" in result:
-        # Fetch the data using the transaction ID
-        weather_response = fetch_premium_data(result["tx_id"])
-        
-        # Inject the actual data dictionary into the result so the frontend can read it
-        result["premium_data"] = weather_response.get("data")
-
     return {"firewall_verdict": result}
 
 @app.get("/status")
