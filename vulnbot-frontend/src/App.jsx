@@ -392,7 +392,7 @@ export default function App() {
                             Premium Data Unlocked via x402:
                           </div>
                           <div className="space-y-1 text-blue-300">
-                            {msg.verdict.premium_data.data && Object.entries(msg.verdict.premium_data.data).map(([key, val]) => (
+                            {msg.verdict.premium_data && Object.entries(msg.verdict.premium_data).map(([key, val]) => (
                               <div key={key} className="flex justify-between gap-4">
                                 <span className="text-neutral-500 shrink-0 capitalize">{key.replace(/_/g, ' ')}</span>
                                 <span className="text-right">{String(val)}</span>
