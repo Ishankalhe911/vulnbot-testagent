@@ -19,8 +19,7 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 
 # ── Config ─────────────────────────────────────────────────────────────────
 ORACLE_URL        = os.getenv("ORACLE_URL", "https://ageniz-backend.onrender.com")
-OPENWEATHER_KEY   = os.getenv("OPENWEATHER_API_KEY", "")
-WEATHER_CITY      = "Mumbai"
+
 
 VENDOR_DEFAULTS = {
     "weather": 1.0,
@@ -174,72 +173,36 @@ def resolve_amount(amount_algo, prompt: str) -> float:
     print(f"⚠️  Fallback to global default: {DEFAULT_AMOUNT} ALGO")
     return DEFAULT_AMOUNT
 
-
 def fetch_premium_data(tx_id: str) -> dict:
     """
-    Real x402 flow — fetch live weather data using TxID as payment receipt.
-    Falls back to mock if OPENWEATHER_API_KEY not set.
+    Agent redeeming its TxID at the remote Vendor API.
     """
+    print(f"📦 [x402] Agent presenting receipt to remote Vendor API: {tx_id[:16]}...")
+    
+    # Dynamically build the vendor URL using your existing ORACLE_URL config
+    base_url = ORACLE_URL.rstrip('/')
+    vendor_url = f"{base_url}/api/v1/premium-data"
+    
     try:
-        print(f"📦 [x402] Verifying receipt: {tx_id[:16]}...")
-
-        if not OPENWEATHER_KEY:
-            print("⚠️  OPENWEATHER_API_KEY not set — using mock data")
-            return _mock_weather(tx_id)
-
         response = httpx.get(
-            "https://api.openweathermap.org/data/2.5/weather",
-            params={
-                "q":     WEATHER_CITY,
-                "appid": OPENWEATHER_KEY,
-                "units": "metric"
-            },
-            timeout=10
+            vendor_url,
+            headers={"x-payment-receipt": tx_id},
+            timeout=15
         )
-
+        
         if response.status_code == 200:
-            raw = response.json()
-            data = {
-                "city":          raw["name"],
-                "country":       raw["sys"]["country"],
-                "temperature":   f"{raw['main']['temp']}°C",
-                "feels_like":    f"{raw['main']['feels_like']}°C",
-                "condition":     raw["weather"][0]["description"].title(),
-                "humidity":      f"{raw['main']['humidity']}%",
-                "wind_speed":    f"{raw['wind']['speed']} m/s",
-                "visibility":    f"{raw.get('visibility', 0) // 1000} km",
-                "data_source":   "OpenWeatherMap (Live)",
-                "x402_receipt":  tx_id[:20] + "...",
-                "agent_message": f"Live weather for {raw['name']} — paid & verified via Ageniz x402"
-            }
-            print(f"✅ Real weather data fetched for {raw['name']}")
-            return {"success": True, "data": data}
-
+            print("✅ [x402] Vendor accepted receipt and unlocked data!")
+            # The vendor API already wraps the response in a "data" dictionary
+            return {"success": True, "data": response.json().get("data")}
         else:
-            print(f"⚠️ Weather API {response.status_code} — falling back to mock")
-            return _mock_weather(tx_id)
-
+            print(f"❌ [x402] Vendor rejected receipt (Status {response.status_code})")
+            error_detail = response.json().get("detail", "Vendor rejected payment")
+            return {"success": False, "reason": error_detail}
+            
     except Exception as e:
-        print(f"❌ Weather fetch error: {e} — falling back to mock")
-        return _mock_weather(tx_id)
-
-
-def _mock_weather(tx_id: str) -> dict:
-    return {
-        "success": True,
-        "data": {
-            "city":          "Mumbai",
-            "temperature":   "31°C",
-            "condition":     "Partly Cloudy",
-            "humidity":      "78%",
-            "wind_speed":    "14 km/h",
-            "data_source":   "Mock (set OPENWEATHER_API_KEY for live data)",
-            "x402_receipt":  tx_id[:20] + "...",
-            "agent_message": "Payment verified — add OPENWEATHER_API_KEY for real weather"
-        }
-    }
-
-
+        print(f"❌ [x402] Network error connecting to Vendor: {e}")
+        return {"success": False, "reason": f"Network Error: {str(e)}"}
+    
 def process_agent_request(prompt: str) -> dict:
     print(f"\n🤖 VulnBot received: '{prompt}'")
 
