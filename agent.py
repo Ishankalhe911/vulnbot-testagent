@@ -6,6 +6,7 @@ Ageniz is the ONLY security layer.
 
 import os
 import json
+import time
 import httpx
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -18,8 +19,7 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 # ── Config ─────────────────────────────────────────────────────────────────
-ORACLE_URL        = os.getenv("ORACLE_URL", "https://ageniz-backend.onrender.com")
-
+ORACLE_URL = os.getenv("ORACLE_URL", "https://ageniz-backend.onrender.com")
 
 VENDOR_DEFAULTS = {
     "weather": 1.0,
@@ -62,43 +62,29 @@ firewall = AgenizSDK(
 firewall.opt_in()
 
 
-# ── Layer state mapping — covers every Oracle layer string ─────────────────
+# ── Layer state mapping ────────────────────────────────────────────────────
 LAYER_INDEX_MAP = {
-    # L0 — verified vendor cap breach
     "spend_cap_verified_per_txn":    0,
     "spend_cap_verified_daily":      0,
-    # L1 — global unknown daily cap
     "spend_cap_global_unknown":      1,
-    # L2 — heuristics
     "heuristics_burner":             2,
     "heuristics_unverified_cap":     2,
     "heuristics_trusted_cap":        2,
     "heuristics_trusted_daily_cap":  2,
-    # L3 — ML scoring
     "ml_scoring":                    3,
-    # L4 — signature / blockchain
     "approved":                      4,
 }
 
 
 def build_layer_states(status: str, layer_hit: str, wallet_tier: str) -> list:
-    """
-    Returns a 5-element list of "pass" | "fail" | "skip"
-    covering every possible Oracle outcome properly.
-    """
     is_verified = (wallet_tier == "VERIFIED")
 
-    # ── 1. SUCCESS ROUTING ──
     if status in ["SUCCESS", "SAFE"]:
         if is_verified:
-            # TSA PreCheck: L0 passes, L1/L2 bypassed, L3/L4 pass
             return ["pass", "skip", "skip", "pass", "pass"]
         else:
-            # Unknown but safe: L0 skipped, L1-L4 pass
             return ["skip", "pass", "pass", "pass", "pass"]
 
-    # ── 2. FAILURE ROUTING ──
-    # If the transaction is QUARANTINED, it's always an ML failure (L3)
     if status in ["QUARANTINE", "ANOMALY"]:
         blocked_idx = 3
     else:
@@ -111,7 +97,6 @@ def build_layer_states(status: str, layer_hit: str, wallet_tier: str) -> list:
         elif i == blocked_idx:
             states.append("fail")
         else:
-            # Passed layers before the block
             if is_verified:
                 if i == 0: states.append("pass")
                 elif i in [1, 2]: states.append("skip")
@@ -119,9 +104,8 @@ def build_layer_states(status: str, layer_hit: str, wallet_tier: str) -> list:
             else:
                 if i == 0: states.append("skip")
                 else: states.append("pass")
-                
+
     return states
-   
 
 
 def parse_prompt_with_gemini(prompt: str) -> dict:
@@ -137,7 +121,6 @@ def parse_prompt_with_gemini(prompt: str) -> dict:
                 raw_text = raw_text[4:]
         raw_text = raw_text.strip()
 
-        print(f"   Gemini raw: {raw_text}")
         parsed = json.loads(raw_text)
 
         return {
@@ -148,10 +131,10 @@ def parse_prompt_with_gemini(prompt: str) -> dict:
         }
 
     except json.JSONDecodeError as e:
-        print(f"❌ Gemini JSON parse error: {e}")
+        print(f"[VulnBot] ❌ Gemini JSON parse error: {e}")
         return {"recipient": None, "amount_algo": None, "intent": "parse_error", "error": str(e)}
     except Exception as e:
-        print(f"❌ Gemini error: {e}")
+        print(f"[VulnBot] ❌ Gemini error: {e}")
         return {"recipient": None, "amount_algo": None, "intent": "parse_error", "error": str(e)}
 
 
@@ -167,54 +150,65 @@ def resolve_amount(amount_algo, prompt: str) -> float:
     prompt_lower = prompt.lower()
     for keyword, default in VENDOR_DEFAULTS.items():
         if keyword in prompt_lower:
-            print(f"⚠️  No amount — using {keyword} default: {default} ALGO")
+            print(f"[VulnBot] ⚠️  No amount specified — using {keyword} default: {default} ALGO")
             return default
 
-    print(f"⚠️  Fallback to global default: {DEFAULT_AMOUNT} ALGO")
+    print(f"[VulnBot] ⚠️  Fallback to global default: {DEFAULT_AMOUNT} ALGO")
     return DEFAULT_AMOUNT
+
 
 def fetch_premium_data(tx_id: str) -> dict:
     """
-    Agent redeeming its TxID at the remote Vendor API.
+    Agent redeeming its TxID at the remote Vendor API — true x402 flow.
     """
-    print(f"📦 [x402] Agent presenting receipt to remote Vendor API: {tx_id[:16]}...")
-    
-    # Dynamically build the vendor URL using your existing ORACLE_URL config
-    base_url = ORACLE_URL.rstrip('/')
+    print(f"\n[VulnBot] 🤖 Hit Paywall! Presenting on-chain receipt to Vendor...")
+    print(f"[VulnBot] 📦 TxID Receipt: {tx_id[:20]}...")
+
+    base_url   = ORACLE_URL.rstrip('/')
     vendor_url = f"{base_url}/api/v1/premium-data"
-    
+
     try:
         response = httpx.get(
             vendor_url,
             headers={"x-payment-receipt": tx_id},
             timeout=15
         )
-        
-        if response.status_code == 200:
-            print("✅ [x402] Vendor accepted receipt and unlocked data!")
-            # The vendor API already wraps the response in a "data" dictionary
-            return {"success": True, "data": response.json().get("data")}
-        else:
-            print(f"❌ [x402] Vendor rejected receipt (Status {response.status_code})")
-            error_detail = response.json().get("detail", "Vendor rejected payment")
-            return {"success": False, "reason": error_detail}
-            
-    except Exception as e:
-        print(f"❌ [x402] Network error connecting to Vendor: {e}")
-        return {"success": False, "reason": f"Network Error: {str(e)}"}
-    
-def process_agent_request(prompt: str) -> dict:
-    print(f"\n🤖 VulnBot received: '{prompt}'")
 
-    # Step 1 — Gemini extracts intent
+        if response.status_code == 200:
+            data = response.json().get("data", {})
+            temp      = data.get("temperature", "?")
+            condition = data.get("condition", "?")
+            print(f"[VulnBot] 🌦️  Data Received: {temp}, {condition}!")
+            print(f"[VulnBot] ✅ x402 flow complete — premium resource unlocked!\n")
+            return {"success": True, "data": data}
+        else:
+            error_detail = response.json().get("detail", "Vendor rejected payment")
+            print(f"[VulnBot] ❌ Vendor rejected receipt (HTTP {response.status_code}): {error_detail}")
+            return {"success": False, "reason": error_detail}
+
+    except Exception as e:
+        print(f"[VulnBot] ❌ Network error connecting to Vendor: {e}")
+        return {"success": False, "reason": f"Network Error: {str(e)}"}
+
+
+def process_agent_request(prompt: str) -> dict:
+    t_start = time.time()
+
+    print(f"\n{'='*60}")
+    print(f"[VulnBot] 🤖 New Request: '{prompt}'")
+    print(f"{'='*60}")
+
+    # ── Step 1: Gemini extracts intent ─────────────────────────────
+    print(f"[VulnBot] 🧠 Sending to Gemini LLM for intent extraction...")
     parsed      = parse_prompt_with_gemini(prompt)
     recipient   = parsed.get("recipient")
     amount_algo = parsed.get("amount_algo")
     intent      = parsed.get("intent", "unknown")
 
-    print(f"   Extracted: recipient={recipient} | amount={amount_algo} | intent={intent}")
+    print(f"[VulnBot] 🧠 Gemini extracted → recipient: {recipient[:12] if recipient else 'None'}... | amount: {amount_algo} ALGO | intent: {intent}")
 
     if intent == "parse_error":
+        print(f"[VulnBot] ❌ LLM parsing failed — aborting")
         return {
             "status": "ERROR",
             "reason": f"LLM parsing failed: {parsed.get('error', 'unknown')}",
@@ -224,6 +218,7 @@ def process_agent_request(prompt: str) -> dict:
         }
 
     if not recipient or intent == "no_payment":
+        print(f"[VulnBot] ℹ️  No payment intent detected — skipping firewall")
         return {
             "status":     "NO_INTENT",
             "reason":     "No payment intent detected.",
@@ -233,14 +228,18 @@ def process_agent_request(prompt: str) -> dict:
             "layer_info": {}
         }
 
-    # Step 2 — Resolve amount
+    # ── Step 2: Resolve amount ──────────────────────────────────────
     final_amount = resolve_amount(amount_algo, prompt)
-    print(f"🛡️  Routing to Ageniz: {final_amount} ALGO → {recipient}")
 
-    # Step 3 — Ageniz validates + executes
-    result = firewall.pay(recipient=recipient, amount_algo=final_amount, context=prompt)
+    # ── Step 3: Ageniz firewall ─────────────────────────────────────
+    print(f"\n[VulnBot] 🛡️  Routing to Ageniz Firewall: {final_amount} ALGO → {recipient[:16]}...")
+    print(f"[VulnBot] ⏳ Awaiting Oracle ML attestation + Algorand settlement...")
 
-    # Attach LLM context
+    t_ageniz = time.time()
+    result    = firewall.pay(recipient=recipient, amount_algo=final_amount, context=prompt)
+    t_ageniz_elapsed = time.time() - t_ageniz
+
+    # ── Step 4: Attach LLM context ──────────────────────────────────
     result["llm_extracted"] = {
         "recipient":     recipient,
         "amount_algo":   final_amount,
@@ -248,22 +247,17 @@ def process_agent_request(prompt: str) -> dict:
         "amount_source": "gemini" if amount_algo else "default"
     }
 
-    # Extract debug info
-    # ── 1. Extract what the SDK actually gave us ──
     debug       = result.get("debug") or {}
     layer_hit   = debug.get("layer", "")
     wallet_tier = debug.get("wallet_tier", "UNKNOWN")
     status      = result.get("status", "ERROR")
 
-    # ── 2. DYNAMIC CONTEXT RECOVERY (ZERO HARDCODING) ──
-    # Since the SDK swallowed the database tier on SUCCESS, we recover it dynamically.
-    # We check if the recipient exists inside the Agent's own System Prompt.
+    # Dynamic context recovery
     if status in ["SUCCESS", "SAFE"] and wallet_tier == "UNKNOWN":
         if recipient and (recipient in AGENT_SYSTEM_PROMPT):
             wallet_tier = "VERIFIED"
-            debug["wallet_tier"] = "VERIFIED" # Restore the badge for the UI
+            debug["wallet_tier"] = "VERIFIED"
 
-    # ── 3. Build layer_info for frontend ──
     result["layer_info"] = {
         "layer_hit":       layer_hit,
         "wallet_tier":     wallet_tier,
@@ -276,17 +270,26 @@ def process_agent_request(prompt: str) -> dict:
         "effective_cap":   debug.get("effective_cap_algo"),
     }
 
-    # ── 4. Build layer_states ──
     result["layer_states"] = build_layer_states(status, layer_hit, wallet_tier)
 
-    print(f"   Layer hit: '{layer_hit}' | Status: {status} | States: {result['layer_states']}")
-
-    # Step 4 — Fetch real data if payment succeeded
     if status == "SUCCESS":
-        tx_id       = result.get("tx_id")
-        data_result = fetch_premium_data(tx_id)
+        tx_id = result.get("tx_id")
+        print(f"\n[VulnBot] ✅ Ageniz approved in {t_ageniz_elapsed:.1f}s!")
+        print(f"[VulnBot] ⛓️  Block finalized on Algorand! TxID: {tx_id[:20]}...")
+        print(f"[VulnBot] 🔗 Explorer: https://testnet.explorer.perawallet.app/tx/{tx_id}")
+
+        # ── Step 5: x402 data fetch ─────────────────────────────────
+        data_result            = fetch_premium_data(tx_id)
         result["premium_data"] = data_result.get("data") if data_result["success"] else None
         result["data_fetched"] = data_result["success"]
         result["data_error"]   = data_result.get("reason") if not data_result["success"] else None
+
+    elif status in ["BLOCKED", "QUARANTINE", "ANOMALY"]:
+        print(f"\n[VulnBot] 🛡️  Ageniz BLOCKED transaction in {t_ageniz_elapsed:.1f}s!")
+        print(f"[VulnBot] 🚨 Reason: {debug.get('reason', 'Anomaly detected')}")
+
+    total_elapsed = time.time() - t_start
+    print(f"\n[VulnBot] ⏱️  Total request time: {total_elapsed:.2f}s")
+    print(f"{'='*60}\n")
 
     return result
