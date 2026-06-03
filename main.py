@@ -34,7 +34,7 @@ async def agent_status():
     """Returns current agent wallet status and reputation."""
     return firewall.get_status()
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     return {
         "status":  "online",
