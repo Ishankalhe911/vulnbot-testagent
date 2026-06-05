@@ -252,12 +252,6 @@ def process_agent_request(prompt: str) -> dict:
     wallet_tier = debug.get("wallet_tier", "UNKNOWN")
     status      = result.get("status", "ERROR")
 
-    # Dynamic context recovery
-    if status in ["SUCCESS", "SAFE"] and wallet_tier == "UNKNOWN":
-        if recipient and (recipient in AGENT_SYSTEM_PROMPT):
-            wallet_tier = "VERIFIED"
-            debug["wallet_tier"] = "VERIFIED"
-
     result["layer_info"] = {
         "layer_hit":       layer_hit,
         "wallet_tier":     wallet_tier,
