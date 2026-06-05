@@ -11,6 +11,7 @@ import httpx
 import google.generativeai as genai
 from dotenv import load_dotenv
 from ageniz_sdk.core import AgenizSDK
+from supabase import create_client, Client
 
 load_dotenv()
 
@@ -60,6 +61,53 @@ firewall = AgenizSDK(
     oracle_url=ORACLE_URL
 )
 firewall.opt_in()
+
+# ── Supabase client ────────────────────────────────────────────────────────
+_supabase: Client | None = None
+try:
+    _supabase = create_client(
+        os.getenv("SUPABASE_URL", ""),
+        os.getenv("SUPABASE_KEY", "")
+    )
+    print("✅ [DB] Supabase transaction logger connected")
+except Exception as e:
+    print(f"⚠️  [DB] Supabase unavailable — logging disabled: {e}")
+
+
+def _log_transaction(
+    api_key:        str,
+    recipient:      str,
+    amount_algo:    float,
+    verdict:        str,
+    ml_confidence:  float | None,
+    wallet_tier:    str,
+    layer_hit:      str,
+    reason:         str,
+    algo_txn_id:    str | None,
+    scenario_tag:   str | None = None
+) -> None:
+    """
+    Fire-and-forget Supabase insert.
+    Never raises — logging failure must never break the agent.
+    """
+    if _supabase is None:
+        return
+    try:
+        _supabase.table("transaction_logs").insert({
+            "api_key":        api_key,
+            "recipient":      recipient,
+            "amount_algo":    amount_algo,
+            "verdict":        verdict,
+            "ml_confidence":  ml_confidence,
+            "wallet_tier":    wallet_tier,
+            "layer_hit":      layer_hit,
+            "reason":         reason,
+            "algo_txn_id":    algo_txn_id,
+            "scenario_tag":   scenario_tag,
+        }).execute()
+        print(f"📊 [DB] Logged: {verdict} | {amount_algo} ALGO → {recipient[:12]}...")
+    except Exception as e:
+        print(f"⚠️  [DB] Log failed (non-fatal): {e}")
 
 
 # ── Layer state mapping ────────────────────────────────────────────────────
@@ -191,7 +239,7 @@ def fetch_premium_data(tx_id: str) -> dict:
         return {"success": False, "reason": f"Network Error: {str(e)}"}
 
 
-def process_agent_request(prompt: str) -> dict:
+def process_agent_request(prompt: str, scenario_tag: str | None = None) -> dict:
     t_start = time.time()
 
     print(f"\n{'='*60}")
@@ -281,6 +329,22 @@ def process_agent_request(prompt: str) -> dict:
     elif status in ["BLOCKED", "QUARANTINE", "ANOMALY"]:
         print(f"\n[VulnBot] 🛡️  Ageniz BLOCKED transaction in {t_ageniz_elapsed:.1f}s!")
         print(f"[VulnBot] 🚨 Reason: {debug.get('reason', 'Anomaly detected')}")
+
+    # ── Step 6: Log to Supabase ────────────────────────────────────
+    # Fires after result is fully assembled — has complete picture
+    # Non-blocking: failure here never breaks the agent response
+    _log_transaction(
+        api_key       = firewall.api_key,
+        recipient     = recipient,
+        amount_algo   = final_amount,
+        verdict       = status,
+        ml_confidence = result.get("score"),
+        wallet_tier   = wallet_tier,
+        layer_hit     = layer_hit,
+        reason        = debug.get("reason", ""),
+        algo_txn_id   = result.get("tx_id"),
+        scenario_tag  = scenario_tag
+    )
 
     total_elapsed = time.time() - t_start
     print(f"\n[VulnBot] ⏱️  Total request time: {total_elapsed:.2f}s")
